@@ -1,7 +1,13 @@
 from datetime import date
 import streamlit as st
 from core.extractor import extract, draft_followup
+from core.llm import transcribe_audio
+from audiorecorder import audiorecorder
 from core import db
+if "recordings" not in st.session_state:
+    st.session_state["recordings"] = []
+if "rec_counter" not in st.session_state:
+    st.session_state["rec_counter"] = 0
 
 # ---------- Setup ----------
 st.set_page_config(
@@ -205,6 +211,121 @@ elif page.endswith("New Meeting"):
             st.session_state["title"] = name
 
     st.write("")
+    st.markdown("**🎙️ Audio input**")
+    audio_tab1, audio_tab2 = st.tabs(["📁 Upload file", "🎤 Record live"])
+
+    # ----- Tab 1: Upload -----
+    with audio_tab1:
+        audio_file = st.file_uploader(
+            "Drag your meeting recording here",
+            type=["mp3", "wav", "m4a", "webm", "mp4", "ogg"],
+            label_visibility="collapsed",
+        )
+        if audio_file is not None:
+            col_a, col_b = st.columns([1, 3])
+            with col_a:
+                if st.button("📁 Transcribe upload", key="transcribe_upload"):
+                    with st.spinner("Transcribing with Whisper…"):
+                        try:
+                            text = transcribe_audio(audio_file.getvalue(), audio_file.name)
+                            st.session_state["transcript"] = text
+                            st.success(f"✅ Transcribed {len(text)} characters.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Transcription failed: {e}")
+            with col_b:
+                st.caption("Whisper will transcribe the audio into the transcript box below.")
+
+    # ----- Tab 2: Record live -----
+    with audio_tab2:
+        st.caption("Click the recorder to start. Click stop when done. No time limit — record as long as you need.")
+
+        wav_bytes = audiorecorder(
+            start_prompt="🔴 Start recording",
+            stop_prompt="⏹️ Stop",
+            pause_prompt="⏸️ Paused",
+            show_visualizer=True,
+            key="live_recorder",
+        )
+
+        # audiorecorder returns an AudioSegment-like object; check it's non-empty
+        if wav_bytes and len(wav_bytes) > 0:
+            audio_bytes = wav_bytes.export(format="wav").read()
+            current_sig = hash(audio_bytes)
+
+            if current_sig != st.session_state.get("last_audio_id"):
+                st.session_state["rec_counter"] += 1
+                st.session_state["recordings"].append({
+                    "id": st.session_state["rec_counter"],
+                    "name": f"Recording {st.session_state['rec_counter']}",
+                    "bytes": audio_bytes,
+                })
+                st.session_state["last_audio_id"] = current_sig
+                st.rerun()
+
+        # ---- List existing recordings ----
+        recs = st.session_state["recordings"]
+
+        if recs:
+            st.markdown(f"**🎧 {len(recs)} recording(s)**")
+
+            for rec in recs:
+                with st.container():
+                    c1, c2, c3 = st.columns([3, 1, 1])
+
+                    with c1:
+                        st.audio(rec["bytes"], format="audio/wav")
+                        st.caption(f"{rec['name']} · {len(rec['bytes'])//1024} KB")
+
+                    with c2:
+                        if st.button("🎤 Transcribe", key=f"trans_{rec['id']}"):
+                            with st.spinner(f"Transcribing {rec['name']}…"):
+                                try:
+                                    text = transcribe_audio(rec["bytes"], f"{rec['name']}.wav")
+                                    existing = st.session_state.get("transcript", "")
+                                    separator = "\n\n" if existing.strip() else ""
+                                    st.session_state["transcript"] = existing + separator + text
+                                    st.success(f"✅ {rec['name']} transcribed.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Transcription failed: {e}")
+
+                    with c3:
+                        if st.button("🗑️ Delete", key=f"del_{rec['id']}"):
+                            st.session_state["recordings"] = [
+                                r for r in recs if r["id"] != rec["id"]
+                            ]
+                            st.rerun()
+
+            st.markdown("---")
+            b1, b2, b3 = st.columns([1, 1, 2])
+
+            with b1:
+                if st.button("🎤 Transcribe all", key="transcribe_all"):
+                    with st.spinner("Transcribing all recordings…"):
+                        try:
+                            combined = []
+                            for rec in recs:
+                                t = transcribe_audio(rec["bytes"], f"{rec['name']}.wav")
+                                combined.append(f"[{rec['name']}]\n{t}")
+                            st.session_state["transcript"] = "\n\n".join(combined)
+                            st.success(f"✅ Transcribed {len(recs)} recordings.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Transcription failed: {e}")
+
+            with b2:
+                if st.button("🗑️ Delete all", key="delete_all"):
+                    st.session_state["recordings"] = []
+                    st.session_state["last_audio_id"] = None
+                    st.rerun()
+
+            with b3:
+                st.caption("Transcribe adds text to the box below. Delete clears it.")
+        else:
+            st.info("No recordings yet. Click **Start recording** above.")
+
+    st.markdown("---")
     title = st.text_input("Meeting title", value=st.session_state.get("title", ""), placeholder="e.g., Weekly Product Sync")
     mdate = st.date_input("Meeting date", value=date.today())
     transcript = st.text_area(
@@ -255,11 +376,19 @@ elif page.endswith("New Meeting"):
         items = result.get("action_items", [])
         if items:
             for item in items:
+                # Normalize: string → dict
+                if isinstance(item, str):
+                    item = {"task": item, "owner": "UNASSIGNED",
+                            "deadline": None, "priority": "medium",
+                            "source_quote": ""}
+                elif not isinstance(item, dict):
+                    continue
+
                 st.markdown(
-                    f"**{item.get('task','')}**  \n"
-                    f"👤 {item.get('owner','UNASSIGNED')} · "
+                    f"**{item.get('task') or ''}**  \n"
+                    f"👤 {item.get('owner') or 'UNASSIGNED'} · "
                     f"📅 {item.get('deadline') or '—'} · "
-                    f"🎯 {item.get('priority','medium')}"
+                    f"🎯 {item.get('priority') or 'medium'}"
                 )
                 if item.get("source_quote"):
                     st.caption(f"_{item['source_quote']}_")

@@ -1,4 +1,6 @@
 groq
 streamlit
 python-dotenv
-pandas
+streamlit-audiorecorder
+audioop-lts
+pydub

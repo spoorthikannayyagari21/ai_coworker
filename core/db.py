@@ -51,12 +51,25 @@ def save_meeting(title, date, summary, decisions, people):
 def save_tasks(meeting_id, items):
     with _conn() as c:
         for it in items:
+            # LLMs sometimes return strings instead of dicts — normalize
+            if isinstance(it, str):
+                it = {"task": it, "owner": "UNASSIGNED",
+                      "deadline": None, "priority": "medium",
+                      "source_quote": ""}
+            elif not isinstance(it, dict):
+                continue  # skip anything unparseable
+
             c.execute(
                 """INSERT INTO tasks(meeting_id,task,owner,deadline,priority,source_quote)
                    VALUES (?,?,?,?,?,?)""",
-                (meeting_id, it.get("task",""), it.get("owner","UNASSIGNED"),
-                 it.get("deadline"), it.get("priority","medium"),
-                 it.get("source_quote","")),
+                (
+                    meeting_id,
+                    it.get("task") or "",
+                    it.get("owner") or "UNASSIGNED",
+                    it.get("deadline"),
+                    it.get("priority") or "medium",
+                    it.get("source_quote") or "",
+                ),
             )
 
 

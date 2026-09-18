@@ -32,3 +32,11 @@ def call_json(system: str, user: str) -> dict:
         ],
     )
     return json.loads(resp.choices[0].message.content)
+def transcribe_audio(file_bytes: bytes, filename: str) -> str:
+    """Send audio bytes to Groq Whisper, return the transcript text."""
+    resp = get_client().audio.transcriptions.create(
+        file=(filename, file_bytes),
+        model="whisper-large-v3-turbo",
+        response_format="text",
+    )
+    return resp if isinstance(resp, str) else resp.text

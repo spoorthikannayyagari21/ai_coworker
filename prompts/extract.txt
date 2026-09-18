@@ -6,7 +6,7 @@ STRICT RULES:
 - Owners must be names explicitly mentioned, or "UNASSIGNED".
 - Deadlines must be ISO dates (YYYY-MM-DD) or null. Resolve relative dates using MEETING_DATE.
 - Every action item MUST include a source_quote copied verbatim from the transcript.
-
+IMPORTANT: Every element of "action_items" MUST be a JSON object with the keys task, owner, deadline, priority, source_quote. Never return a plain string in the list.
 Return JSON matching exactly this schema:
 {
   "summary": "string (max 5 bullets, only substantive points)",
