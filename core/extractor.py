@@ -8,6 +8,44 @@ SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 def extract(transcript: str, meeting_date: str) -> dict:
     user_msg = f"MEETING_DATE: {meeting_date}\n\nTRANSCRIPT:\n{transcript}"
     return call_json(SYSTEM_PROMPT, user_msg)
+def extract_sanitized(transcript: str, meeting_date: str):
+    """
+    Sanitize the transcript, call the LLM, detokenize the output.
+    Returns (result_dict, vault, sanitized_transcript).
+    """
+    from core.sanitizer import sanitize, detokenize_obj
+
+    clean, vault = sanitize(transcript)
+    raw_result = extract(clean, meeting_date)
+    final = detokenize_obj(raw_result, vault)
+    return final, vault, clean
+
+
+def draft_followup_sanitized(meeting_data: dict):
+    """Draft email but sanitize before sending to LLM, detokenize after."""
+    from core.sanitizer import sanitize, detokenize
+    import json
+
+    # Serialize, sanitize, then let the LLM work on the sanitized version
+    payload = json.dumps(meeting_data, indent=2)
+    clean_payload, vault = sanitize(payload)
+
+    from core.llm import get_client, MODEL
+    from pathlib import Path
+
+    prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "followup.txt"
+    FOLLOWUP = prompt_path.read_text(encoding="utf-8")
+
+    resp = get_client().chat.completions.create(
+        model=MODEL,
+        temperature=0.3,
+        messages=[
+            {"role": "system", "content": FOLLOWUP},
+            {"role": "user", "content": clean_payload},
+        ],
+    )
+    email = resp.choices[0].message.content
+    return detokenize(email, vault)
 _FOLLOWUP_PATH = Path(__file__).resolve().parent.parent / "prompts" / "followup.txt"
 FOLLOWUP_PROMPT = _FOLLOWUP_PATH.read_text(encoding="utf-8")
 

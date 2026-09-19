@@ -1,6 +1,6 @@
 from datetime import date
 import streamlit as st
-from core.extractor import extract, draft_followup, ask_meetings
+from core.extractor import extract, draft_followup, ask_meetings, extract_sanitized, draft_followup_sanitized
 from core.llm import transcribe_audio
 from audiorecorder import audiorecorder
 from core import db
@@ -341,7 +341,9 @@ elif page.endswith("New Meeting"):
         else:
             with st.spinner("Analyzing with Groq…"):
                 try:
-                    result = extract(transcript, mdate.isoformat())
+                    result, vault, sanitized = extract_sanitized(
+                        transcript, mdate.isoformat()
+                    )
                 except Exception as e:
                     st.error(f"Groq error: {e}")
                     st.stop()
@@ -355,12 +357,24 @@ elif page.endswith("New Meeting"):
             db.save_tasks(mid, result.get("action_items", []))
 
             st.session_state["last_result"] = result
+            st.session_state["last_sanitized"] = sanitized
+            st.session_state["last_vault"] = vault
             st.session_state.pop("last_email", None)
             st.rerun()
     # ---- Results render here — OUTSIDE the button block ----
     result = st.session_state.get("last_result")
     if result:
         st.success("✅ Meeting analyzed and saved!")
+        with st.expander("🔒 What the LLM actually saw (sanitized)"):
+            st.caption("Sensitive values were replaced with reversible tokens before the AI processed this transcript.")
+            sanitized = st.session_state.get("last_sanitized", "")
+            vault = st.session_state.get("last_vault", {})
+            st.code(sanitized or "(no sanitized transcript cached)", language="text")
+            if vault:
+                st.markdown("**Token → original value** (kept only on your machine):")
+                st.json(vault)
+            else:
+                st.info("No sensitive values were detected in this transcript.")
 
         st.markdown("### 📝 Summary")
         st.markdown(result.get("summary", ""))
@@ -397,11 +411,10 @@ elif page.endswith("New Meeting"):
         st.write(", ".join(result.get("people", [])) or "_None detected._")
 
         st.markdown("---")
-
         if st.button("📧 Draft Follow-up Email", key="draft_email"):
             with st.spinner("Drafting email…"):
                 try:
-                    email = draft_followup({
+                    email = draft_followup_sanitized({
                         "summary": result.get("summary", ""),
                         "decisions": result.get("decisions", []),
                         "action_items": result.get("action_items", []),
@@ -489,27 +502,47 @@ elif page.endswith("Action Items"):
                         st.rerun()
 elif page.endswith("Ask"):
     st.markdown("## 💬 Ask Your Meetings")
-    st.markdown('<div class="subtitle">Ask anything about past meetings. The AI answers with citations.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Ask anything about past meetings. The AI searches locally, then reasons over the top matches.</div>', unsafe_allow_html=True)
 
-    context = db.all_meetings_text()
+    total = len(db.get_meetings())
 
-    if not context:
+    if total == 0:
         st.info("No meetings yet. Add one first, then come back and ask questions.")
     else:
-        st.caption(f"Searching across {len(db.get_meetings())} meetings.")
+        st.caption(f"Searching across {total} meeting(s).")
 
         question = st.text_input(
             "Your question",
             placeholder="e.g., What did we decide about the database?",
         )
 
+        with st.expander("⚙️ Search settings"):
+            top_k = st.slider(
+                "Meetings to reason over",
+                min_value=1,
+                max_value=min(10, total),
+                value=min(5, total),
+                help="Fewer = cheaper and faster. More = broader context."
+            )
+
         if st.button("Ask", type="primary") and question.strip():
-            with st.spinner("Searching meetings…"):
+            # Stage 1: Local retrieval (free)
+            matches = db.search_meetings(question, top_k=top_k)
+            context = db.meetings_to_context(matches)
+
+            # Show which meetings were selected
+            with st.expander(f"🔍 Retrieved {len(matches)} meeting(s) (local filter, zero cost)", expanded=False):
+                for m in matches:
+                    st.markdown(f"- **{m['title']}** — {m['date']}")
+
+            # Stage 2: LLM reasoning
+            with st.spinner(f"Reasoning over {len(matches)} meeting(s)…"):
                 try:
                     answer = ask_meetings(question, context)
                     st.session_state["last_answer"] = {
                         "q": question,
                         "a": answer,
+                        "matched": [m["title"] for m in matches],
                     }
                 except Exception as e:
                     st.error(f"Something went wrong: {e}")
@@ -518,4 +551,5 @@ elif page.endswith("Ask"):
             item = st.session_state["last_answer"]
             st.markdown("---")
             st.markdown(f"**Q: {item['q']}**")
-            st.markdown(f"**A:** {item['a']}")                        
+            st.markdown(f"**A:** {item['a']}")
+            st.caption(f"Sources considered: {', '.join(item['matched'])}")                      

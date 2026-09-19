@@ -154,4 +154,110 @@ def all_meetings_text():
             f"Decisions: {decision_str}\n"
             f"People: {', '.join(people)}"
         )
-    return "\n\n---\n\n".join(chunks)   
+    return "\n\n---\n\n".join(chunks)  
+import re
+from datetime import datetime
+
+STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "do", "does", "did",
+    "what", "who", "when", "where", "why", "how", "about", "on", "in",
+    "of", "to", "for", "and", "or", "we", "i", "you", "they", "it",
+    "this", "that", "with", "at", "by", "from", "as", "be", "been",
+}
+
+
+def _tokenize(text: str) -> set:
+    """Lowercase, strip punctuation, drop stopwords."""
+    if not text:
+        return set()
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {w for w in words if w not in STOPWORDS and len(w) > 2}
+
+
+def score_meeting(meeting: dict, question: str, query_terms: set, today: str) -> float:
+    """Score a single meeting against the question."""
+    score = 0.0
+
+    # 1. Word overlap between question and (title + summary + decisions)
+    haystack = " ".join([
+        meeting.get("title") or "",
+        meeting.get("summary") or "",
+        meeting.get("decisions_json") or "",
+        meeting.get("people_json") or "",
+    ])
+    haystack_terms = _tokenize(haystack)
+    overlap = len(query_terms & haystack_terms)
+    score += overlap * 2.0  # each matching term counts a lot
+
+    # 2. Title match bonus
+    title_terms = _tokenize(meeting.get("title") or "")
+    score += len(query_terms & title_terms) * 1.5
+
+    # 3. Recency bonus — newer meetings get a small boost
+    try:
+        mdate = datetime.fromisoformat(meeting["date"]).date()
+        tdate = datetime.fromisoformat(today).date()
+        days_old = (tdate - mdate).days
+        score += max(0, 5 - days_old * 0.05)  # fades over 100 days
+    except Exception:
+        pass
+
+    return score
+
+
+def search_meetings(question: str, top_k: int = 5) -> list:
+    """
+    Return the top_k most relevant meetings for the question.
+    Pure local computation — no LLM, no cost.
+    """
+    from datetime import date
+    today = date.today().isoformat()
+    query_terms = _tokenize(question)
+
+    if not query_terms:
+        # No meaningful query terms — just return the most recent
+        return get_meetings()[:top_k]
+
+    scored = []
+    for m in get_meetings():
+        s = score_meeting(m, question, query_terms, today)
+        scored.append((s, m))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Keep only meetings with actual relevance (score > 0)
+    top = [m for s, m in scored if s > 0][:top_k]
+
+    # Fallback: if nothing matched, return the most recent 3
+    if not top:
+        top = get_meetings()[:3]
+
+    return top
+
+
+def meetings_to_context(meetings: list) -> str:
+    """Convert a list of meeting dicts into a context string for the LLM."""
+    import json
+    if not meetings:
+        return ""
+    chunks = []
+    for m in meetings:
+        try:
+            decisions = json.loads(m["decisions_json"] or "[]")
+        except Exception:
+            decisions = []
+        try:
+            people = json.loads(m["people_json"] or "[]")
+        except Exception:
+            people = []
+        decision_str = "; ".join(
+            d.get("decision", "") if isinstance(d, dict) else str(d)
+            for d in decisions
+        )
+        chunks.append(
+            f"MEETING: {m['title']} (date: {m['date']})\n"
+            f"Summary: {m['summary']}\n"
+            f"Decisions: {decision_str}\n"
+            f"People: {', '.join(people)}"
+        )
+    return "\n\n---\n\n".join(chunks)
