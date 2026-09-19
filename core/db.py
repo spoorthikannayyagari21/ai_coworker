@@ -127,3 +127,31 @@ def overdue_tasks():
                ORDER BY deadline ASC""",
             (today,),
         )]
+    
+def all_meetings_text():
+    """Return a single string with all meetings, for RAG-lite."""
+    import json
+    meetings = get_meetings()
+    if not meetings:
+        return ""
+    chunks = []
+    for m in meetings:
+        try:
+            decisions = json.loads(m["decisions_json"] or "[]")
+        except Exception:
+            decisions = []
+        try:
+            people = json.loads(m["people_json"] or "[]")
+        except Exception:
+            people = []
+        decision_str = "; ".join(
+            d.get("decision", "") if isinstance(d, dict) else str(d)
+            for d in decisions
+        )
+        chunks.append(
+            f"MEETING: {m['title']} (date: {m['date']})\n"
+            f"Summary: {m['summary']}\n"
+            f"Decisions: {decision_str}\n"
+            f"People: {', '.join(people)}"
+        )
+    return "\n\n---\n\n".join(chunks)   

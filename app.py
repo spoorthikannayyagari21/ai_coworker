@@ -1,6 +1,6 @@
 from datetime import date
 import streamlit as st
-from core.extractor import extract, draft_followup
+from core.extractor import extract, draft_followup, ask_meetings
 from core.llm import transcribe_audio
 from audiorecorder import audiorecorder
 from core import db
@@ -30,7 +30,7 @@ st.markdown("""
     }
     section[data-testid="stSidebar"] > div:first-child { padding-top: 1rem; }
 
-        # Kill Streamlit branding (keep the sidebar toggle working)
+    # Kill Streamlit branding (keep the sidebar toggle working)
     #MainMenu, footer {visibility: hidden;}
     header[data-testid="stHeader"] { background: transparent; }
 
@@ -104,10 +104,9 @@ with st.sidebar:
 
     page = st.radio(
         "Navigation",
-        ["🏠  Dashboard", "➕  New Meeting", "📄  Meetings", "✅  Action Items"],
+        ["🏠  Dashboard", "➕  New Meeting", "📄  Meetings", "✅  Action Items", "💬  Ask"],
         label_visibility="collapsed",
     )
-
 # ---------- Helpers ----------
 def kpi_card(label, value, sub=""):
     return f"""
@@ -146,8 +145,7 @@ if page.endswith("Dashboard"):
         st.error(f"⚠️ **{len(overdue)} overdue task(s)** — {owner_summary}")
 
     st.write("")
-    c1, c2, c3, c4 = st.columns(4)
-    st.write("")
+    
     
 
     c1, c2, c3, c4 = st.columns(4)
@@ -357,9 +355,8 @@ elif page.endswith("New Meeting"):
             db.save_tasks(mid, result.get("action_items", []))
 
             st.session_state["last_result"] = result
-            st.session_state.pop("last_email", None)  # clear old email
+            st.session_state.pop("last_email", None)
             st.rerun()
-
     # ---- Results render here — OUTSIDE the button block ----
     result = st.session_state.get("last_result")
     if result:
@@ -490,3 +487,35 @@ elif page.endswith("Action Items"):
                     if new_status != t["status"]:
                         db.update_task_status(t["id"], new_status)
                         st.rerun()
+elif page.endswith("Ask"):
+    st.markdown("## 💬 Ask Your Meetings")
+    st.markdown('<div class="subtitle">Ask anything about past meetings. The AI answers with citations.</div>', unsafe_allow_html=True)
+
+    context = db.all_meetings_text()
+
+    if not context:
+        st.info("No meetings yet. Add one first, then come back and ask questions.")
+    else:
+        st.caption(f"Searching across {len(db.get_meetings())} meetings.")
+
+        question = st.text_input(
+            "Your question",
+            placeholder="e.g., What did we decide about the database?",
+        )
+
+        if st.button("Ask", type="primary") and question.strip():
+            with st.spinner("Searching meetings…"):
+                try:
+                    answer = ask_meetings(question, context)
+                    st.session_state["last_answer"] = {
+                        "q": question,
+                        "a": answer,
+                    }
+                except Exception as e:
+                    st.error(f"Something went wrong: {e}")
+
+        if st.session_state.get("last_answer"):
+            item = st.session_state["last_answer"]
+            st.markdown("---")
+            st.markdown(f"**Q: {item['q']}**")
+            st.markdown(f"**A:** {item['a']}")                        
