@@ -9,16 +9,39 @@ def extract(transcript: str, meeting_date: str) -> dict:
     user_msg = f"MEETING_DATE: {meeting_date}\n\nTRANSCRIPT:\n{transcript}"
     return call_json(SYSTEM_PROMPT, user_msg)
 def extract_sanitized(transcript: str, meeting_date: str):
-    """
-    Sanitize the transcript, call the LLM, detokenize the output.
-    Returns (result_dict, vault, sanitized_transcript).
-    """
-    from core.sanitizer import sanitize, detokenize_obj
+    from core.sanitizer import sanitize, detokenize_obj, validate_output
+    from core.db import get_setting
 
-    clean, vault = sanitize(transcript)
-    raw_result = extract(clean, meeting_date)
-    final = detokenize_obj(raw_result, vault)
-    return final, vault, clean
+    custom_terms = [
+        t.strip() for t in (get_setting("custom_terms", "") or "").splitlines()
+        if t.strip()
+    ]
+    clean, vault = sanitize(transcript, mask_names=True, custom_terms=custom_terms)
+
+    # --- Get raw LLM output (as text) so we can validate it ---
+    from core.llm import get_client, MODEL
+    from core.extractor import SYSTEM_PROMPT
+    import json
+
+    resp = get_client().chat.completions.create(
+        model=MODEL,
+        response_format={"type": "json_object"},
+        temperature=0.1,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"MEETING_DATE: {meeting_date}\n\nTRANSCRIPT:\n{clean}"},
+        ],
+    )
+    raw_text = resp.choices[0].message.content
+
+    # --- Validate BEFORE detokenizing ---
+    warnings = validate_output(raw_text, vault)
+
+    # --- Detokenize ---
+    raw_json = json.loads(raw_text)
+    final = detokenize_obj(raw_json, vault)
+
+    return final, vault, clean, warnings
 
 
 def draft_followup_sanitized(meeting_data: dict):

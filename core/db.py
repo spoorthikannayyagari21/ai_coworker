@@ -36,40 +36,84 @@ def init_db():
             FOREIGN KEY(meeting_id) REFERENCES meetings(id)
         );
         """)
-
+    init_settings_table()
 
 def save_meeting(title, date, summary, decisions, people):
     import json
+
+    # --- Normalize people: flatten nested lists, coerce to strings ---
+    if not isinstance(people, list):
+        people = [people] if people else []
+    flat_people = []
+    for p in people:
+        if isinstance(p, (list, tuple)):
+            flat_people.extend([str(x) for x in p if x])
+        elif p:
+            flat_people.append(str(p))
+    people = flat_people
+
+    # --- Normalize decisions: each item must be a dict with a "decision" key ---
+    if not isinstance(decisions, list):
+        decisions = []
+    clean_decisions = []
+    for d in decisions:
+        if isinstance(d, dict):
+            clean_decisions.append({
+                "decision": str(d.get("decision", "") or ""),
+                "quote": str(d.get("quote", "") or ""),
+            })
+        elif isinstance(d, str):
+            clean_decisions.append({"decision": d, "quote": ""})
+    decisions = clean_decisions
+    print("DEBUG decisions:", type(decisions), decisions)
+    print("DEBUG people:", type(people), people)
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO meetings(title,date,summary,decisions_json,people_json) VALUES (?,?,?,?,?)",
-            (title, date, summary, json.dumps(decisions), json.dumps(people)),
+            (
+                title or "",
+                date or "",
+                summary or "",
+                json.dumps(decisions),
+                json.dumps(people),
+            ),
         )
         return cur.lastrowid
-
 
 def save_tasks(meeting_id, items):
     with _conn() as c:
         for it in items:
-            # LLMs sometimes return strings instead of dicts — normalize
+            # Strings → dict
             if isinstance(it, str):
                 it = {"task": it, "owner": "UNASSIGNED",
                       "deadline": None, "priority": "medium",
                       "source_quote": ""}
             elif not isinstance(it, dict):
-                continue  # skip anything unparseable
+                continue
+
+            # Coerce every field to a plain type
+            task_text = it.get("task") or ""
+            if isinstance(task_text, (list, tuple)):
+                task_text = " ".join(str(x) for x in task_text)
+            owner = it.get("owner") or "UNASSIGNED"
+            if isinstance(owner, (list, tuple)):
+                owner = ", ".join(str(x) for x in owner)
+            deadline = it.get("deadline")
+            if isinstance(deadline, (list, tuple)):
+                deadline = deadline[0] if deadline else None
+            priority = it.get("priority") or "medium"
+            if isinstance(priority, (list, tuple)):
+                priority = priority[0] if priority else "medium"
+            source_quote = it.get("source_quote") or ""
+            if isinstance(source_quote, (list, tuple)):
+                source_quote = " ".join(str(x) for x in source_quote)
 
             c.execute(
                 """INSERT INTO tasks(meeting_id,task,owner,deadline,priority,source_quote)
                    VALUES (?,?,?,?,?,?)""",
-                (
-                    meeting_id,
-                    it.get("task") or "",
-                    it.get("owner") or "UNASSIGNED",
-                    it.get("deadline"),
-                    it.get("priority") or "medium",
-                    it.get("source_quote") or "",
-                ),
+                (meeting_id, str(task_text), str(owner),
+                 str(deadline) if deadline else None,
+                 str(priority), str(source_quote)),
             )
 
 
@@ -261,3 +305,80 @@ def meetings_to_context(meetings: list) -> str:
             f"People: {', '.join(people)}"
         )
     return "\n\n---\n\n".join(chunks)
+def init_settings_table():
+    with _conn() as c:
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with _conn() as c:
+        row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+def delete_meeting(mid: int):
+    """Delete a meeting and all its tasks."""
+    with _conn() as c:
+        c.execute("DELETE FROM tasks WHERE meeting_id=?", (mid,))
+        c.execute("DELETE FROM meetings WHERE id=?", (mid,))
+
+
+def delete_all_meetings():
+    """Nuclear option — wipes everything."""
+    with _conn() as c:
+        c.execute("DELETE FROM tasks")
+        c.execute("DELETE FROM meetings")
+def find_similar_tasks(new_task: str, owner: str, threshold: float = 0.6) -> list:
+    """
+    Find open tasks by the same owner with high word overlap.
+    Returns a list of dicts with the existing task + similarity score.
+    """
+    import re
+
+    def tokens(s):
+        return set(re.findall(r"[a-z0-9]+", (s or "").lower())) - {
+            "the", "a", "an", "is", "to", "for", "of", "and", "on", "in", "by", "at"
+        }
+
+    new_tokens = tokens(new_task)
+    if not new_tokens:
+        return []
+
+    similar = []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM tasks WHERE owner=? AND status != 'done'",
+            (owner,),
+        ).fetchall()
+
+    for row in rows:
+        existing_tokens = tokens(row["task"])
+        if not existing_tokens:
+            continue
+        overlap = len(new_tokens & existing_tokens)
+        union = len(new_tokens | existing_tokens)
+        score = overlap / union if union else 0
+        if score >= threshold:
+            similar.append({
+                "id": row["id"],
+                "task": row["task"],
+                "deadline": row["deadline"],
+                "status": row["status"],
+                "similarity": round(score, 2),
+            })
+
+    similar.sort(key=lambda x: x["similarity"], reverse=True)
+    return similar
