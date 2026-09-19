@@ -4,6 +4,7 @@ from core.extractor import extract, draft_followup, ask_meetings, extract_saniti
 from core.llm import transcribe_audio
 from audiorecorder import audiorecorder
 from core import db
+
 if "recordings" not in st.session_state:
     st.session_state["recordings"] = []
 if "rec_counter" not in st.session_state:
@@ -19,10 +20,9 @@ st.set_page_config(
 
 db.init_db()
 
-# ---------- Custom CSS (the Bolt look) ----------
+# ---------- Custom CSS ----------
 st.markdown("""
 <style>
-    /* Base */
     .stApp { background: #f8fafc; }
     section[data-testid="stSidebar"] {
         background: #ffffff;
@@ -30,15 +30,12 @@ st.markdown("""
     }
     section[data-testid="stSidebar"] > div:first-child { padding-top: 1rem; }
 
-    # Kill Streamlit branding (keep the sidebar toggle working)
     #MainMenu, footer {visibility: hidden;}
     header[data-testid="stHeader"] { background: transparent; }
 
-    /* Typography */
     h1, h2, h3 { color: #0f172a; font-weight: 700; letter-spacing: -0.02em; }
     .subtitle { color: #64748b; font-size: 0.95rem; margin-top: -0.5rem; }
 
-    /* KPI card */
     .kpi-card {
         background: #ffffff;
         border: 1px solid #e5e7eb;
@@ -50,7 +47,6 @@ st.markdown("""
     .kpi-value { color: #0f172a; font-size: 2rem; font-weight: 700; margin-top: 4px; }
     .kpi-sub   { color: #94a3b8; font-size: 0.78rem; margin-top: 2px; }
 
-    /* Meeting card */
     .meet-card {
         background:#ffffff; border:1px solid #e5e7eb; border-radius:12px;
         padding:16px 20px; margin-bottom:10px;
@@ -59,7 +55,6 @@ st.markdown("""
     .meet-meta  { color:#94a3b8; font-size:0.8rem; margin-top:4px; }
     .meet-sum   { color:#475569; font-size:0.88rem; margin-top:8px; }
 
-    /* Task card */
     .task-card {
         background:#ffffff; border:1px solid #e5e7eb; border-radius:10px;
         padding:14px 16px; margin-bottom:10px;
@@ -72,13 +67,11 @@ st.markdown("""
     .pill-medium { background:#fef3c7; color:#b45309; }
     .pill-low    { background:#dcfce7; color:#15803d; }
 
-    /* Primary button */
     .stButton > button {
         border-radius: 8px;
         font-weight: 600;
     }
 
-    /* Sidebar logo */
     .logo-row { display:flex; align-items:center; gap:10px; padding:6px 4px 16px 4px; }
     .logo-badge {
         width:38px; height:38px; border-radius:10px;
@@ -107,6 +100,7 @@ with st.sidebar:
         ["🏠  Dashboard", "➕  New Meeting", "📄  Meetings", "✅  Action Items", "💬  Ask", "⚙️  Settings"],
         label_visibility="collapsed",
     )
+
 # ---------- Helpers ----------
 def kpi_card(label, value, sub=""):
     return f"""
@@ -131,10 +125,7 @@ if page.endswith("Dashboard"):
 
     st.markdown("## Welcome back 👋")
     st.markdown('<div class="subtitle">Here\'s what your AI co-worker found across your meetings.</div>', unsafe_allow_html=True)
-  
 
-
-    # ---- Overdue alert banner ----
     overdue = db.overdue_tasks()
     if overdue:
         owners = {}
@@ -145,9 +136,6 @@ if page.endswith("Dashboard"):
         st.error(f"⚠️ **{len(overdue)} overdue task(s)** — {owner_summary}")
 
     st.write("")
-    
-    
-
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(kpi_card("Total Meetings", s["meetings"]), unsafe_allow_html=True)
     c2.markdown(kpi_card("Pending Tasks", s["pending"], f"{s['in_progress']} in progress"), unsafe_allow_html=True)
@@ -212,7 +200,6 @@ elif page.endswith("New Meeting"):
     st.markdown("**🎙️ Audio input**")
     audio_tab1, audio_tab2 = st.tabs(["📁 Upload file", "🎤 Record live"])
 
-    # ----- Tab 1: Upload -----
     with audio_tab1:
         audio_file = st.file_uploader(
             "Drag your meeting recording here",
@@ -234,9 +221,8 @@ elif page.endswith("New Meeting"):
             with col_b:
                 st.caption("Whisper will transcribe the audio into the transcript box below.")
 
-    # ----- Tab 2: Record live -----
     with audio_tab2:
-        st.caption("Click the recorder to start. Click stop when done. No time limit — record as long as you need.")
+        st.caption("Click the recorder to start. Click stop when done. No time limit.")
 
         wav_bytes = audiorecorder(
             start_prompt="🔴 Start recording",
@@ -246,7 +232,6 @@ elif page.endswith("New Meeting"):
             key="live_recorder",
         )
 
-        # audiorecorder returns an AudioSegment-like object; check it's non-empty
         if wav_bytes and len(wav_bytes) > 0:
             audio_bytes = wav_bytes.export(format="wav").read()
             current_sig = hash(audio_bytes)
@@ -261,7 +246,6 @@ elif page.endswith("New Meeting"):
                 st.session_state["last_audio_id"] = current_sig
                 st.rerun()
 
-        # ---- List existing recordings ----
         recs = st.session_state["recordings"]
 
         if recs:
@@ -270,11 +254,9 @@ elif page.endswith("New Meeting"):
             for rec in recs:
                 with st.container():
                     c1, c2, c3 = st.columns([3, 1, 1])
-
                     with c1:
                         st.audio(rec["bytes"], format="audio/wav")
                         st.caption(f"{rec['name']} · {len(rec['bytes'])//1024} KB")
-
                     with c2:
                         if st.button("🎤 Transcribe", key=f"trans_{rec['id']}"):
                             with st.spinner(f"Transcribing {rec['name']}…"):
@@ -287,7 +269,6 @@ elif page.endswith("New Meeting"):
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Transcription failed: {e}")
-
                     with c3:
                         if st.button("🗑️ Delete", key=f"del_{rec['id']}"):
                             st.session_state["recordings"] = [
@@ -297,7 +278,6 @@ elif page.endswith("New Meeting"):
 
             st.markdown("---")
             b1, b2, b3 = st.columns([1, 1, 2])
-
             with b1:
                 if st.button("🎤 Transcribe all", key="transcribe_all"):
                     with st.spinner("Transcribing all recordings…"):
@@ -311,13 +291,11 @@ elif page.endswith("New Meeting"):
                             st.rerun()
                         except Exception as e:
                             st.error(f"Transcription failed: {e}")
-
             with b2:
                 if st.button("🗑️ Delete all", key="delete_all"):
                     st.session_state["recordings"] = []
                     st.session_state["last_audio_id"] = None
                     st.rerun()
-
             with b3:
                 st.caption("Transcribe adds text to the box below. Delete clears it.")
         else:
@@ -339,20 +317,17 @@ elif page.endswith("New Meeting"):
         elif not title.strip():
             st.warning("Please give the meeting a title.")
         else:
-             # Clear any previous privacy data before processing a new meeting
             for key in ["last_vault", "last_sanitized", "last_warnings", "last_result", "last_email"]:
                 st.session_state.pop(key, None)
 
-            with st.spinner("Analyzing with Groq…"):
-                try:
-                    result, vault, sanitized, warnings = extract_sanitized(transcript, mdate.isoformat())
-# ...
-                    st.session_state["last_vault"] = vault
-                    st.session_state["last_sanitized"] = sanitized
-                    st.session_state["last_warnings"] = warnings
-                except Exception as e:
-                    st.error(f"Groq error: {e}")
-                    st.stop()
+            try:
+                with st.spinner("Analyzing with Groq…"):
+                    result, vault, sanitized, warnings = extract_sanitized(
+                        transcript, mdate.isoformat()
+                    )
+            except Exception as e:
+                st.error(f"Groq error: {e}")
+                st.stop()
 
             mid = db.save_meeting(
                 title, mdate.isoformat(),
@@ -360,103 +335,18 @@ elif page.endswith("New Meeting"):
                 result.get("decisions", []),
                 result.get("people", []),
             )
-
-            # ---- Check for similar tasks before inserting ----
-            items = result.get("action_items", []) or []
-            duplicates = []
-            for item in items:
-                if isinstance(item, str):
-                    item = {"task": item, "owner": "UNASSIGNED"}
-                if not isinstance(item, dict):
-                    continue
-                owner = item.get("owner") or "UNASSIGNED"
-                task_text = item.get("task") or ""
-                if not task_text:
-                    continue
-                similar = db.find_similar_tasks(task_text, owner)
-                if similar:
-                    duplicates.append({
-                        "new": item,
-                        "matches": similar,
-                    })
+            db.save_tasks(mid, result.get("action_items", []))
 
             st.session_state["last_result"] = result
-            st.session_state["pending_mid"] = mid
-            st.session_state["pending_items"] = items
-            st.session_state["pending_duplicates"] = duplicates
-            st.session_state.pop("last_email", None)
+            st.session_state["last_vault"] = vault
+            st.session_state["last_sanitized"] = sanitized
+            st.session_state["last_warnings"] = warnings
             st.rerun()
-    # ---- Results render here — OUTSIDE the button block ----
+
     result = st.session_state.get("last_result")
     if result:
-
         st.success("✅ Meeting analyzed and saved!")
-            # ---- Duplicate resolution panel ----
-    pending_dups = st.session_state.get("pending_duplicates", [])
-    pending_mid = st.session_state.get("pending_mid")
-    pending_items = st.session_state.get("pending_items", [])
 
-    if pending_mid and pending_dups:
-        st.warning(f"⚠️ Found {len(pending_dups)} task(s) that look similar to existing ones.")
-        st.caption("Review before saving. You can skip a duplicate, or save it as a new task.")
-
-        keep_flags = {}
-        for i, dup in enumerate(pending_dups):
-            with st.expander(f"🔍 '{dup['new'].get('task', '')[:70]}'", expanded=True):
-                st.markdown(f"**New task owner:** {dup['new'].get('owner', 'UNASSIGNED')}")
-                st.markdown("**Similar existing task(s):**")
-                for m in dup["matches"]:
-                    st.markdown(
-                        f"- {m['task']}  \n"
-                        f"  (similarity {m['similarity']}, status: {m['status']}, deadline: {m['deadline'] or '—'})"
-                    )
-                keep_flags[i] = st.checkbox(
-                    "Save this new task anyway",
-                    value=False,
-                    key=f"keep_dup_{i}",
-                )
-
-        col_save, col_cancel = st.columns([1, 4])
-        with col_save:
-            if st.button("💾 Save decisions", key="save_dup_decisions", type="primary"):
-                # Filter out tasks the user did NOT want to save
-                items_to_save = []
-                dup_keys = {id(d["new"]) for d in pending_dups}
-                for i, dup in enumerate(pending_dups):
-                    if keep_flags.get(i):
-                        items_to_save.append(dup["new"])
-                # Include non-duplicate tasks
-                for item in pending_items:
-                    if isinstance(item, str):
-                        item = {"task": item, "owner": "UNASSIGNED"}
-                    if not isinstance(item, dict):
-                        continue
-                    if id(item) not in dup_keys:
-                        items_to_save.append(item)
-
-                db.save_tasks(pending_mid, items_to_save)
-                st.session_state.pop("pending_mid", None)
-                st.session_state.pop("pending_items", None)
-                st.session_state.pop("pending_duplicates", None)
-                st.success(f"Saved {len(items_to_save)} task(s).")
-                st.rerun()
-
-        with col_cancel:
-            if st.button("Save all anyway", key="save_all_anyway"):
-                db.save_tasks(pending_mid, pending_items)
-                st.session_state.pop("pending_mid", None)
-                st.session_state.pop("pending_items", None)
-                st.session_state.pop("pending_duplicates", None)
-                st.success("Saved all tasks.")
-                st.rerun()
-
-        if pending_mid and not pending_dups:
-            db.save_tasks(pending_mid, pending_items)
-            st.session_state.pop("pending_mid", None)
-            st.session_state.pop("pending_items", None)
-            st.session_state.pop("pending_duplicates", None)
-            st.rerun()
-        
         with st.expander("🔒 What the LLM actually saw (sanitized)"):
             st.caption("Sensitive values were replaced with reversible tokens before the AI processed this transcript.")
             sanitized = st.session_state.get("last_sanitized", "")
@@ -467,31 +357,36 @@ elif page.endswith("New Meeting"):
                 st.json(vault)
             else:
                 st.info("No sensitive values were detected in this transcript.")
-         # 🚨 Warnings block (NEW — paste it right here)
+
         if st.session_state.get("last_warnings"):
             with st.expander("🚨 Privacy validation warnings"):
                 for w in st.session_state["last_warnings"]:
                     st.warning(w)
 
         st.markdown("### 📝 Summary")
-        st.markdown(result.get("summary", ""))
+        st.markdown(result.get("summary", "") or "_No summary produced._")
 
         st.markdown("### ✅ Decisions")
-        for d in result.get("decisions", []):
-            st.markdown(f"- **{d.get('decision','')}**  \n  _{d.get('quote','')}_")
+        decisions = result.get("decisions", []) or []
+        if decisions:
+            for d in decisions:
+                if isinstance(d, dict):
+                    st.markdown(f"- **{d.get('decision','')}**  \n  _{d.get('quote','')}_")
+                else:
+                    st.markdown(f"- {d}")
+        else:
+            st.write("_No decisions recorded._")
 
         st.markdown("### 📌 Action Items")
-        items = result.get("action_items", [])
+        items = result.get("action_items", []) or []
         if items:
             for item in items:
-                # Normalize: string → dict
                 if isinstance(item, str):
                     item = {"task": item, "owner": "UNASSIGNED",
                             "deadline": None, "priority": "medium",
                             "source_quote": ""}
                 elif not isinstance(item, dict):
                     continue
-
                 st.markdown(
                     f"**{item.get('task') or ''}**  \n"
                     f"👤 {item.get('owner') or 'UNASSIGNED'} · "
@@ -505,9 +400,20 @@ elif page.endswith("New Meeting"):
             st.write("_None found._")
 
         st.markdown("### 👥 People")
-        st.write(", ".join(result.get("people", [])) or "_None detected._")
+        people = result.get("people", []) or []
+        if people:
+            flat = []
+            for p in people:
+                if isinstance(p, (list, tuple)):
+                    flat.extend(str(x) for x in p)
+                else:
+                    flat.append(str(p))
+            st.write(", ".join(flat))
+        else:
+            st.write("_None detected._")
 
         st.markdown("---")
+
         if st.button("📧 Draft Follow-up Email", key="draft_email"):
             with st.spinner("Drafting email…"):
                 try:
@@ -556,6 +462,7 @@ elif page.endswith("Meetings"):
             if st.button("Cancel", key="confirm_clear_cancel"):
                 st.session_state["confirm_clear_all"] = False
                 st.rerun()
+
     meetings = db.get_meetings()
 
     search = st.text_input("Search meetings by title or summary", "")
@@ -569,7 +476,6 @@ elif page.endswith("Meetings"):
 
     for m in meetings:
         col_card, col_del = st.columns([5, 1])
-
         with col_card:
             st.markdown(f"""
             <div class="meet-card">
@@ -578,9 +484,8 @@ elif page.endswith("Meetings"):
                 <div class="meet-sum">{(m['summary'] or '')[:280]}…</div>
             </div>
             """, unsafe_allow_html=True)
-
         with col_del:
-            st.write("")  # spacing
+            st.write("")
             if st.button("🗑️ Delete", key=f"del_meeting_{m['id']}"):
                 db.delete_meeting(m["id"])
                 st.success(f"Deleted: {m['title']}")
@@ -628,6 +533,10 @@ elif page.endswith("Action Items"):
                     if new_status != t["status"]:
                         db.update_task_status(t["id"], new_status)
                         st.rerun()
+
+# =========================================================
+# ASK
+# =========================================================
 elif page.endswith("Ask"):
     st.markdown("## 💬 Ask Your Meetings")
     st.markdown('<div class="subtitle">Ask anything about past meetings. The AI searches locally, then reasons over the top matches.</div>', unsafe_allow_html=True)
@@ -654,16 +563,13 @@ elif page.endswith("Ask"):
             )
 
         if st.button("Ask", type="primary") and question.strip():
-            # Stage 1: Local retrieval (free)
             matches = db.search_meetings(question, top_k=top_k)
             context = db.meetings_to_context(matches)
 
-            # Show which meetings were selected
             with st.expander(f"🔍 Retrieved {len(matches)} meeting(s) (local filter, zero cost)", expanded=False):
                 for m in matches:
                     st.markdown(f"- **{m['title']}** — {m['date']}")
 
-            # Stage 2: LLM reasoning
             with st.spinner(f"Reasoning over {len(matches)} meeting(s)…"):
                 try:
                     answer = ask_meetings(question, context)
@@ -680,18 +586,11 @@ elif page.endswith("Ask"):
             st.markdown("---")
             st.markdown(f"**Q: {item['q']}**")
             st.markdown(f"**A:** {item['a']}")
-            st.caption(f"Sources considered: {', '.join(item['matched'])}")  
-            with st.expander("🧪 NER test"):
-                from core.sanitizer import sanitize
-                test = st.text_area("Test text:", value="Alice from Acme Corp called Bob in Mumbai about $50,000.")
-                if test:
-                    clean_regex, v1 = sanitize(test, mask_names=False)
-                    clean_ner, v2 = sanitize(test, mask_names=True)
-                    st.markdown("**Regex only:**")
-                    st.code(clean_regex)
-                    st.markdown("**Regex + NER:**")
-                    st.code(clean_ner)
-                    st.json(v2)
+            st.caption(f"Sources considered: {', '.join(item['matched'])}")
+
+# =========================================================
+# SETTINGS
+# =========================================================
 elif page.endswith("Settings"):
     st.markdown("## ⚙️ Privacy Settings")
     st.markdown('<div class="subtitle">Configure what gets masked before reaching the AI.</div>', unsafe_allow_html=True)
@@ -725,8 +624,9 @@ elif page.endswith("Settings"):
         st.markdown("**Sanitized:**")
         st.code(clean)
         st.markdown("**Vault (stays on your machine):**")
-        st.json(vault)  
-        st.markdown("---")
+        st.json(vault)
+
+    st.markdown("---")
     st.markdown("### 🗑️ Clear all temporary privacy data")
     st.caption("Wipes the vault and sanitized text from your current session.")
 
@@ -746,21 +646,8 @@ elif page.endswith("Settings"):
     else:
         st.info("Nothing to clear — no privacy data in the current session.")
 
-    if st.button("🗑️ Clear now", type="secondary"):
-        for key in ["last_vault", "last_sanitized", "last_warnings", "last_result", "last_email"]:
-            st.session_state.pop(key, None)
-        st.session_state["_just_cleared"] = True
-        st.rerun()
-
-    if st.session_state.pop("_just_cleared", False):
-        st.success("✅ Temporary privacy data cleared. Check the panel above — it should now be empty.")
-        st.markdown("---")
-    st.markdown("### 🗑️ Clear all temporary privacy data")
-    st.caption("Wipes the vault and sanitized text from your current session.")
-
     if st.button("🗑️ Clear now", type="secondary", key="clear_privacy_data_btn"):
         for key in ["last_vault", "last_sanitized", "last_warnings", "last_result", "last_email"]:
             st.session_state.pop(key, None)
         st.success("Temporary privacy data cleared.")
         st.rerun()
-                        
